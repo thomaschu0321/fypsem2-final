@@ -1,442 +1,491 @@
-# GLANCE + Bi-GAT: Adaptive LLM-Augmented Rumor Detection on Social Media
+# 3. Methodology
 
-## 1. Introduction
+## 3.1 Overview and Problem Formulation
 
-### 1.1 Background
+Rumor detection on social media presents unique challenges that stem from the complex interplay between textual content and propagation structure. Social media posts rarely exist in isolation—they form conversation threads where users reply to, quote, or build upon each other's content. These interactions create **text-attributed graphs (TAGs)**, where each node represents a post with associated text, and edges represent social relationships such as reply or retweet actions.
 
-Rumor detection on social media has become increasingly critical as misinformation spreads rapidly through online platforms. Social media posts rarely exist in isolation—they form complex conversation threads where users reply, quote, and build upon each other's content. These interactions create **text-attributed graphs (TAGs)**, where nodes represent text content (tweets) and edges represent social relationships (replies, retweets).
+Formally, we define a rumor detection dataset as a collection of propagation trees, where each tree $T = (V, E, T, y)$ consists of:
 
-Traditional approaches to rumor detection have relied on hand-crafted features or shallow text embeddings combined with machine learning classifiers. However, these methods fail to capture the intricate interplay between textual semantics and propagation dynamics. Graph Neural Networks (GNNs) have emerged as a powerful paradigm for modeling graph-structured data, demonstrating success in learning joint representations from both content and structure.
+- $V = \{v_0, v_1, ..., v_n\}$: The set of nodes, where $v_0$ denotes the source post (root node) and each $v_i \in V \setminus \{v_0\}$ represents a reply post
+- $E \subseteq V \times V$: The set of directed edges following the direction of information propagation (parent → child)
+- $T = \{t_v\}_{v \in V}$: The text content associated with each node $v$
+- $y \in \{0, 1\}$: The binary label, where $y = 1$ indicates a rumor and $y = 0$ indicates a non-rumor
 
-### 1.2 Problem Statement
+The task is to learn a model $\psi: T \rightarrow y$ that predicts whether the source post is a rumor based on both the propagation structure and the textual content of all posts in the thread.
 
-Despite the success of GNNs in graph learning tasks, they exhibit significant limitations when applied to rumor detection:
+### 3.1.1 Challenges with Standard GNNs
 
-1. **Homophily Assumption**: GNNs assume that connected nodes share similar labels (homophily). However, in social media conversations, reply threads often contain diverse viewpoints—supporters, skeptics, and fact-checkers all engaging with the same content.
+Graph Neural Networks (GNNs) have demonstrated strong performance in various graph learning tasks by aggregating information from neighboring nodes. The standard message-passing framework computes node representations as:
 
-2. **Degree Bias**: GNNs perform poorly on low-degree nodes (e.g., early-stage tweets with few replies) where message passing provides limited information.
+$$h_v^{(\ell)} = \text{UPDATE}^{(\ell)}\left(h_v^{(\ell-1)}, \text{AGGREGATE}^{(\ell)}\left(\{h_u^{(\ell-1)} : u \in \mathcal{N}(v)\}\right)\right)$$
 
-3. **Heterophily Challenges**: Rumor threads frequently contain mixed signals where neighboring nodes have contradictory labels or sentiments.
+where $\mathcal{N}(v)$ denotes the neighbors of node $v$. Despite their success, GNNs face significant limitations when applied to rumor detection:
 
-4. **Semantic Limitations**: Standard GNN architectures capture structural patterns but may miss nuanced semantic content that requires broader contextual understanding.
+1. **Homophily Assumption**: GNNs assume that connected nodes share similar labels (the homophily assumption). However, rumor threads often contain diverse viewpoints—supporters, skeptics, fact-checkers, and casual observers all engage with the same content. This **heterophily** violates the fundamental assumption underlying message passing.
 
-### 1.3 Proposed Approach
+2. **Degree Bias**: GNNs perform poorly on low-degree nodes (e.g., early-stage tweets with few replies) where message passing provides limited contextual information.
 
-We propose **GLANCE + Bi-GAT**, a hybrid framework that combines the selective LLM querying mechanism of GLANCE with the bidirectional attention architecture of Bi-GAT for enhanced rumor detection.
+3. **Structural Limitations**: Standard GNN architectures capture local structural patterns but may miss broader contextual relationships that span multiple hops in the propagation tree.
 
-**GLANCE** (GNN with LLM Assistance for Neighbor- and Context-aware Embeddings) introduces a lightweight router that learns to identify nodes where GNNs typically fail and selectively queries a Large Language Model (LLM) for these challenging cases. The router is trained with an advantage-based objective that compares the utility of LLM queries against relying solely on the GNN.
+### 3.1.2 The GLANCE + Bi-GAT Framework
 
-**Bi-GAT** (Bidirectional Graph Attention Network) provides the GNN backbone, capturing bidirectional information flow through the propagation tree structure. By processing information both top-down (root to leaves) and bottom-up (leaves to root), Bi-GAT effectively models the causal relationships and evidence aggregation inherent in rumor propagation.
+We propose **GLANCE + Bi-GAT**, a hybrid framework that combines the selective LLM querying mechanism of GLANCE with the bidirectional attention architecture of Bi-GAT for enhanced rumor detection. The key insight is that GNNs and LLMs excel at different types of nodes:
 
-## 2. Related Work
+- **GNNs** (specifically Bi-GAT) excel on nodes with high homophily and sufficient connectivity, where message passing effectively aggregates relevant neighborhood information.
 
-### 2.1 Rumor Detection Methods
+- **LLMs** excel on nodes where the GNN struggles—heterophilous nodes with diverse neighbor labels, low-degree nodes with limited structural context, and nodes requiring semantic reasoning beyond structural patterns.
 
-Rumor detection has evolved through several phases:
+Rather than applying LLMs uniformly (which wastes computational resources) or using fixed heuristics (which are brittle and dataset-dependent), GLANCE employs a **learned router** that adaptively decides which nodes benefit from LLM consultation.
 
-- **Early machine learning approaches** relied on hand-crafted features (user credibility, text patterns,传播 patterns) with classifiers like SVM. While achieving moderate success, these methods struggled with the diversity and noise inherent in social media data.
+The framework consists of three main components:
 
-- **Deep learning approaches** introduced CNNs for spatial feature extraction and RNNs/LSTMs for sequential modeling. Ma et al. pioneered the use of RNNs with tree-structured propagation for rumor detection.
+1. **Bi-GAT Backbone**: A bidirectional graph attention network that captures both causal (top-down) and evidential (bottom-up) information flow through the propagation tree.
 
-- **Graph Neural Networks** emerged as a natural fit for social media graphs, with GCNs, GATs, and GraphSAGE demonstrating improved performance by aggregating information across neighbor nodes.
+2. **Homophily Estimator**: An MLP that predicts pseudo-labels from node features, enabling the estimation of local homophily—a strong signal for identifying nodes where GNNs typically fail.
 
-- **Transformer-based methods** like BERT brought advanced semantic understanding to rumor detection tasks.
+3. **GLANCE Router + Refiner**: A lightweight router that decides which nodes to query the LLM, and a refiner MLP that fuses Bi-GAT and LLM embeddings for refined predictions.
 
-### 2.2 GNN-LLM Fusion
+## 3.2 Bi-GAT: Bidirectional Graph Attention Network
 
-Recent work has explored combining LLMs with GNNs in two paradigms:
+### 3.2.1 Motivation for Bidirectional Processing
 
-1. **LLM-as-Enhancer**: LLMs generate text embeddings or external knowledge to enrich node features fed to GNNs.
+Rumor propagation follows a distinctive tree structure where information flows in two complementary directions:
 
-2. **LLM-as-Predictor**: LLMs directly classify serialized graph inputs, avoiding the need for GNN training.
+1. **Top-Down Flow**: The source post (root) influences subsequent replies. The root contains the original claim being evaluated, and this information propagates downward through the tree. Understanding how replies relate to the source requires modeling this causal direction.
 
-However, most hybrid systems apply a single fusion strategy uniformly across all nodes, overlooking per-node variations in semantic quality and structural attributes. This uniform approach wastes computational resources on nodes already well-modeled by GNNs.
+2. **Bottom-Up Flow**: Replies provide evidence about the source. Supportive comments, corrective responses, and expressions of doubt all aggregate information that informs the veracity of the root claim. Capturing this collective evidence requires aggregating from leaves toward the root.
 
-### 2.3 Bi-GAT for Rumor Detection
+Standard GNNs (GCN, GAT) process edges bidirectionally but without distinguishing these semantic roles. Bi-GAT explicitly models both directions as separate processing streams, enabling the network to learn direction-specific attention patterns.
 
-The Bi-GAT architecture, specifically designed for rumor detection, captures bidirectional dependencies in tweet propagation trees:
+### 3.2.2 Graph Attention Convolution
 
-- **Top-Down GAT (TD-GAT)**: Simulates information flow from high-level nodes (root/source) to low-level nodes (replies), suitable for capturing causal relationships where the source tweet influences subsequent replies.
+The fundamental operation in Bi-GAT is the **Graph Attention Convolution (GATConv)**, which computes node representations by attending over neighboring nodes with learned attention coefficients.
 
-- **Bottom-Up GAT (BU-GAT)**: Simulates aggregation of features from low-level nodes (replies) to high-level nodes (root), enabling the source to incorporate collective evidence from the conversation.
+Given a graph with node features $\mathbf{x}_i \in \mathbb{R}^F$, the GATConv layer computes attention scores between each pair of connected nodes:
 
-## 3. Methodology
+$$e_{ij} = \text{LeakyReLU}\left(\mathbf{a}^\top [\mathbf{W}_q \mathbf{x}_i \| \mathbf{W}_k \mathbf{x}_j]\right)$$
 
-### 3.1 Overview
-
-GLANCE + Bi-GAT follows a three-phase training pipeline:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    PHASE 1: Bi-GAT Pre-training                │
-│              Train bidirectional GAT for rumor detection        │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                PHASE 2: Homophily Estimator Training           │
-│           Train MLP Q to predict pseudo-labels for routing      │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                PHASE 3: GLANCE Router + Refiner Training       │
-│    Train lightweight router to selectively query LLM for         │
-│    challenging nodes; train refiner to fuse GNN + LLM embeddings │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### 3.2 Phase 1: Bi-GAT Pre-training
-
-#### 3.2.1 Bidirectional Graph Attention Network
-
-The Bi-GAT architecture consists of two parallel GAT streams:
-
-**Top-Down GAT (TD-GAT)**
-```
-Layer 1: h^(1,td)_i = ReLU( ||_h=1^H Σ_{j∈N_out(i)} α^(h)_ij W^(h)_td1 x_j )
-Layer 2: h^(2,td)_i = 1/H Σ_h=1^H Σ_{j∈N_out(i)} α_ij W_td2 [h^(1,td)_j || x_r]
-```
 where:
-- $N_{out}(i)$ is the set of out-neighbors of node $i$
-- $x_r$ is the root node feature
-- $H$ is the number of attention heads
-- $\alpha_{ij}$ are normalized attention coefficients
+- $\mathbf{W}_q, \mathbf{W}_k \in \mathbb{R}^{F' \times F}$ are learnable weight matrices
+- $\mathbf{a} \in \mathbb{R}^{2F'}$ is the attention parameter vector
+- $[\cdot \| \cdot]$ denotes concatenation
 
-**Bottom-Up GAT (BU-GAT)**
-```
-Layer 1: h^(1,bu)_i = ReLU( ||_h=1^H Σ_{j∈N_in(i)} α^(h)_ij W^(h)_bu1 x_j )
-Layer 2: h^(2,bu)_i = 1/H Σ_h=1^H Σ_{j∈N_in(i)} α_ij W_bu2 [h^(1,bu)_j || x_r]
-```
-where $N_{in}(i)$ is the set of in-neighbors of node $i$.
+The attention coefficients are then normalized across all neighbors using softmax:
 
-**Bidirectional Fusion**
-```
-z_i = [h^(2,td)_i || h^(2,bu)_i] ∈ R^{2F'}
-```
+$$\alpha_{ij} = \frac{\exp(e_{ij})}{\sum_{k \in \mathcal{N}(i)} \exp(e_{ik})}$$
 
-#### 3.2.2 Graph Attention Convolution
+Finally, the node representation is updated by weighted aggregation of neighbor features:
 
-The GATConv layer computes attention scores between nodes:
-```
-e_ij = LeakyReLU(a^T [W_q x_i || W_k x_j])
-α_ij = softmax_j(exp(e_ij) / Σ_k exp(e_ik))
-h'_i = Σ_{j∈N(i)} α_ij W_v x_j
-```
+$$\mathbf{h}'_i = \sum_{j \in \mathcal{N}(i)} \alpha_{ij} \mathbf{W}_v \mathbf{x}_j$$
 
-Multiple attention heads stabilize learning:
-```
-h_i = ||_h=1^H h_i^(h)
-```
+where $\mathbf{W}_v \in \mathbb{R}^{F' \times F}$ is the value projection matrix.
 
-#### 3.2.3 Root Feature Skip Connection
+**Multi-Head Attention**: To stabilize learning and capture diverse relationship types, Bi-GAT employs multiple attention heads. Each head $h = 1, ..., H$ has its own parameters $\mathbf{W}_v^{(h)}$, $\mathbf{a}^{(h)}$, and produces an independent representation. The outputs are concatenated:
 
-Both TD-GAT and BU-GAT incorporate a skip connection to the root node feature in Layer 2:
-```
-h^(2)_i = h^(2)_i + W_r x_r
-```
+$$\mathbf{h}_i = \|_{h=1}^{H} \mathbf{h}_i^{(h)} \in \mathbb{R}^{H \cdot F'}$$
 
-This design ensures that root information—containing the original claim being evaluated—directly influences all node representations.
+### 3.2.3 Top-Down GAT (TD-GAT)
 
-#### 3.2.4 Classification Head
+The Top-Down stream simulates information transmission from high-level nodes (root/source) to low-level nodes (replies). This captures **causal relationships** where the source claim influences downstream engagement.
 
-For graph-level rumor detection, we apply global mean pooling over node embeddings:
-```
-h_g = (1/N) Σ_{i∈g} z_i
-ŷ_g = softmax(MLP(h_g))
-```
+**Layer 1**: Multi-head attention over out-neighbors (nodes that receive information from the current node):
 
-#### 3.2.5 Training Objective
+$${\mathbf{h}_i^{(1,td)}}^{(h)} = \text{ReLU}\left(\sum_{j \in \mathcal{N}_{out}(i)} \alpha_{ij}^{(h)} \mathbf{W}_{td1}^{(h)} \mathbf{x}_j\right)$$
 
-Phase 1 minimizes cross-entropy loss:
-```
-L_bigat = -Σ_{g∈B} [y_g log(ŷ_g) + (1-y_g) log(1-ŷ_g)]
-```
+where $\mathcal{N}_{out}(i)$ is the set of out-neighbors of node $i$.
 
-### 3.3 Phase 2: Homophily Estimator
+**Layer 2**: The second layer incorporates a **root skip connection**, concatenating the neighbor-aggregated representation with the root node feature:
 
-#### 3.3.1 Soft Local Homophily
+$${\mathbf{h}_i^{(2,td)}}^{(h)} = \frac{1}{H} \sum_{h=1}^{H} \sum_{j \in \mathcal{N}_{out}(i)} \alpha_{ij} \mathbf{W}_{td2}\left[{\mathbf{h}_j^{(1,td)}} \| \mathbf{x}_r\right]$$
 
-Local homophily measures how similar a node's label is to its neighbors' labels:
-```
-h_v = p_Q,v · (1/|N(v)| Σ_{u∈N(v)} p_Q,u)
-```
-where $p_Q$ is the probability distribution predicted by the homophily estimator MLP Q.
+where $\mathbf{x}_r$ is the feature vector of the root node $v_0$. This skip connection ensures that information from the source post directly influences all node representations, preventing information dilution through multiple aggregation steps.
 
-#### 3.3.2 Homophily Estimator MLP
+The output of TD-GAT is a single vector per node:
 
-A lightweight MLP predicts pseudo-labels from node features:
-```
-p_Q = softmax(MLP_Q(x_v))
-```
+$$h_i^{td} = {\mathbf{h}_i^{(2,td)}} \in \mathbb{R}^{F'}$$
 
-**Training**: The MLP is trained using graph labels propagated to all nodes within each graph. All nodes in a rumor thread receive the rumor label; all nodes in a non-rumor thread receive the non-rumor label.
+### 3.2.4 Bottom-Up GAT (BU-GAT)
 
-#### 3.3.3 Importance of Homophily Estimation
+The Bottom-Up stream simulates aggregation of features from low-level nodes (replies) to high-level nodes (root and intermediate nodes). This captures **evidential relationships** where replies provide supportive or corrective evidence.
 
-GLANCE identifies local homophily as a strong predictor of GNN vs. LLM advantage:
-- **High homophily**: Neighbors share labels → GNNs excel through message passing
-- **Low homophily**: Neighbors have diverse labels → LLMs may provide better context
+**Layer 1**: Multi-head attention over in-neighbors (nodes that send information to the current node):
 
-### 3.4 Phase 3: GLANCE Router and Refiner
+$${\mathbf{h}_i^{(1,bu)}}^{(h)} = \text{ReLU}\left(\sum_{j \in \mathcal{N}_{in}(i)} \alpha_{ij}^{(h)} \mathbf{W}_{bu1}^{(h)} \mathbf{x}_j\right)$$
 
-#### 3.4.1 Routing Features
+where $\mathcal{N}_{in}(i)$ is the set of in-neighbors of node $i$.
 
-The router receives a feature vector for each node:
-```
-f_v = [z_G(v), u_v, ĥ_v, deg(v), x_v]
-```
-where:
-- $z_G(v)$: Bi-GAT node embedding (256-dim)
-- $u_v$: Uncertainty estimate via MC dropout (1-dim)
-- $\hat{h}_v$: Estimated homophily score (1-dim)
-- $deg(v)$: Node degree (1-dim)
-- $x_v$: BERT text embedding (768-dim)
+**Layer 2**: Similar to TD-GAT, the second layer incorporates a root skip connection:
 
-**Total routing feature dimension**: 256 + 1 + 1 + 1 + 768 = **1027**
+$${\mathbf{h}_i^{(2,bu)}}^{(h)} = \frac{1}{H} \sum_{h=1}^{H} \sum_{j \in \mathcal{N}_{in}(i)} \alpha_{ij} \mathbf{W}_{bu2}\left[{\mathbf{h}_j^{(1,bu)}} \| \mathbf{x}_r\right]$$
 
-#### 3.4.2 Router Architecture
+The output of BU-GAT is:
 
-A lightweight linear layer maps routing features to a routing probability:
-```
-a_v = σ(w^T f_v)
-```
-where $a_v \in [0, 1]$ represents the probability of routing node $v$ to the LLM.
+$$h_i^{bu} = {\mathbf{h}_i^{(2,bu)}} \in \mathbb{R}^{F'}$$
 
-#### 3.4.3 Top-K Routing Strategy
+### 3.2.5 Bidirectional Fusion
 
-Rather than routing based on a fixed threshold, GLANCE uses a **top-K selection** per graph:
-```
-R_g = TopK({a_v : v ∈ g}, k)
-```
-where $k$ follows an exponential decay schedule:
-```
-k(epoch) = k_end + (k_start - k_end) × decay_rate^epoch
-```
+The final Bi-GAT embedding for each node is the concatenation of its top-down and bottom-up representations:
 
-This curriculum-style approach:
-- Routes more nodes early in training (exploration)
-- Reduces routing budget as the model learns to rely on GNN for easier cases
+$$z_i^{BiGAT} = [h_i^{td} \| h_i^{bu}] \in \mathbb{R}^{2F'}$$
 
-#### 3.4.4 LLM Encoder (Multi-hop Context)
+This fusion preserves complementary information from both processing streams. The top-down stream captures how the source influences each node, while the bottom-up stream captures how each node contributes to understanding the source.
 
-For routed nodes, the LLM encoder generates multi-hop context embeddings:
+### 3.2.6 Graph-Level Classification
 
-**Level 0 (Ego)**: The node's own text
-```
-prompt_0(v) = "Predict the node's category from the provided context.\nPossible categories: [rumour, non-rumour].\nEGO:\n{text_v}\nCategory?"
-```
+For rumor detection, we need to classify entire propagation trees rather than individual nodes. Bi-GAT applies **global mean pooling** over node embeddings to obtain a graph-level representation:
 
-**Level 1 (1-hop neighbors)**: Ego + direct neighbors
-```
-prompt_1(v) = "Predict the node's category from the provided context.\nPossible categories: [rumour, non-rumour].\nEGO:\n{text_v}\nHOP1:\n- {neighbor_1}\n- {neighbor_2}\n...\nCategory?"
-```
+$$\mathbf{h}_g = \frac{1}{|V_g|} \sum_{i \in V_g} z_i^{BiGAT}$$
 
-**Level 2 (2-hop neighbors)**: Ego + 2-hop context
-```
-prompt_2(v) = "Predict the node's category from the provided context.\nPossible categories: [rumour, non-rumour].\nEGO:\n{text_v}\nHOP2:\n- {2hop_neighbor_1}\n...\nCategory?"
-```
+The graph-level prediction is then:
 
-**Embedding Concatenation**:
-```
-z_L(v) = [embed(prompt_0) || embed(prompt_1) || embed(prompt_2)] ∈ R^{3×3072}
-```
+$$\hat{y}_g = \text{softmax}\left(\text{MLP}_{class}(\mathbf{h}_g)\right)$$
 
-#### 3.4.5 Refiner MLP
+### 3.2.7 Phase 1: Pre-training Objective
 
-The refiner fuses Bi-GAT and LLM embeddings for routed nodes:
-```
-z_refined = MLP_refiner([z_G(v) || z_L(v)])
-```
+In Phase 1, the Bi-GAT backbone is pre-trained for graph-level rumor detection using standard cross-entropy loss:
 
-Architecture:
-```
-Input: [z_G || z_L] ∈ R^{256 + 9216}
-Layer 1: Linear(9472, 256) + ReLU + Dropout(0.3)
-Layer 2: Linear(256, 128) + ReLU + Dropout(0.3)
-Output: Linear(128, 2) → logits
-```
+$$\mathcal{L}_{BiGAT} = -\sum_{g \in \mathcal{B}} \left[ y_g \log(\hat{y}_g) + (1 - y_g) \log(1 - \hat{y}_g) \right]$$
 
-#### 3.4.6 Graph-Level Prediction
+where $\mathcal{B}$ is a mini-batch of propagation trees and $y_g$ is the ground-truth label.
 
-For graph-level classification:
-1. Non-routed nodes retain Bi-GAT embeddings
-2. Routed nodes use refined embeddings
-3. Graph embedding = mean pooling over node embeddings
-4. Classification head produces final logits
+The Bi-GAT backbone is trained with:
+- AdamW optimizer with learning rate $\eta = 5 \times 10^{-4}$
+- Weight decay $\lambda = 10^{-3}$
+- Gradient clipping at 1.0
+- Early stopping with patience of 20 epochs
 
-#### 3.4.7 Advantage-Based Router Training
+## 3.3 Homophily Estimator
 
-Since LLM calls are non-differentiable, the router is trained using a policy gradient approach.
+### 3.3.1 The Role of Local Homophily
 
-**Advantage Computation**:
-```
-advantage_g = L_GNN(g) - L_refined(g) - β
-```
-where $\beta$ is an LLM cost penalty.
+A key insight from the GLANCE paper is that **local homophily** is a strong predictor of when GNNs vs. LLMs will perform better. Local homophily measures the label similarity between a node and its neighbors:
 
-**Router Loss**:
-```
-L_router = -E[advantage × log(a_v) for routed nodes]
-           -E[(-L_GNN) × log(1 - a_v) for non-routed nodes]
-           + λ × entropy(a_v)
-```
+$$h_v = \frac{1}{|\mathcal{N}(v)|} \sum_{u \in \mathcal{N}(v)} \mathbb{1}[y_u = y_v]$$
 
-The advantage is positive when routing improves prediction (LLM helps); negative when routing hurts.
+Nodes with **high homophily** tend to be surrounded by nodes with the same label, making them well-suited for GNN message passing. Nodes with **low homophily** (heterophilous nodes) have diverse neighbor labels, making GNN aggregation less reliable but potentially better suited for LLM reasoning.
 
-**Combined Loss**:
-```
-L_total = L_pred + λ_router × L_router
-```
+However, true homophily requires access to ground-truth labels, which are unavailable during inference. We therefore train a proxy estimator.
 
-### 3.5 Uncertainty Estimation
+### 3.3.2 MLP Q Architecture
 
-Monte Carlo dropout estimates node-level uncertainty:
+The **Homophily Estimator** is a lightweight MLP $Q$ that predicts node labels from features alone:
+
+$$\hat{y}_v = \arg\max Q(\mathbf{x}_v)$$
+
+The architecture consists of:
+- Input: 768-dimensional BERT embedding
+- Hidden layer: 128 units with ReLU activation
+- Dropout: 0.3
+- Output: 2-class logits (rumor/non-rumor)
+
+### 3.3.3 Training with Pseudo-Labels
+
+Since we don't have node-level labels, we propagate the graph-level label to all nodes within each tree:
+
+$$\hat{y}_v^{(pseudo)} = y_g \quad \forall v \in V_g$$
+
+This is a reasonable proxy because all posts in a rumor thread are related to the same source claim. While individual replies may have varying stances, they are all contextually linked to the source being evaluated.
+
+### 3.3.4 Soft Local Homophily Estimation
+
+Beyond hard pseudo-labels, we compute a **soft local homophily** estimate that captures the probability distribution over labels:
+
+$$p_{Q,v} = \text{softmax}(Q(\mathbf{x}_v)) \in \mathbb{R}^C$$
+
+where $C = 2$ is the number of classes. The soft local homophily is then computed as:
+
+$$\hat{h}_v = p_{Q,v} \cdot \left(\frac{1}{|\mathcal{N}(v)|} \sum_{u \in \mathcal{N}(v)} p_{Q,u}\right)$$
+
+This measures the alignment between a node's predicted label distribution and its neighbors' predicted distributions. A node surrounded by neighbors with similar predicted labels will have high $\hat{h}_v$, while heterophilous nodes will have low values.
+
+### 3.3.5 Phase 2: Pre-training Objective
+
+The Homophily Estimator is trained with cross-entropy loss on node-level pseudo-labels:
+
+$$\mathcal{L}_{Q} = -\sum_{v \in \mathcal{V}} \left[ \hat{y}_v^{(pseudo)} \log(p_{Q,v}) + (1 - \hat{y}_v^{(pseudo)}) \log(1 - p_{Q,v}) \right]$$
+
+After Phase 2 training, the Homophily Estimator is frozen and used as a fixed component in Phase 3.
+
+## 3.4 GLANCE: Adaptive LLM-Augmented Rumor Detection
+
+### 3.4.1 Overview of the GLANCE Framework
+
+GLANCE (GNN with LLM Assistance for Neighbor- and Context-aware Embeddings) is designed to leverage the complementary strengths of Bi-GAT and LLMs. The key insight is that different nodes require different processing strategies:
+
+- Nodes where Bi-GAT performs well (high homophily, sufficient connectivity) should rely on Bi-GAT embeddings
+- Nodes where Bi-GAT struggles (heterophilous, low-degree, semantically complex) should additionally consult the LLM
+
+GLANCE consists of three steps:
+
+1. **Generate routing features** for each node using Bi-GAT embeddings, uncertainty estimates, homophily scores, degree, and original features
+
+2. **Route challenging nodes** to the LLM based on the router's decision
+
+3. **Refine predictions** by fusing Bi-GAT and LLM embeddings for routed nodes
+
+### 3.4.2 Step 1: Generating Routing Features
+
+The router receives a feature vector $\mathbf{f}_v \in \mathbb{R}^{1027}$ for each node, consisting of five signals:
+
+**1. Bi-GAT Embedding** $\mathbf{z}_G(v) \in \mathbb{R}^{256}$: The 256-dimensional bidirectional GAT embedding capturing structural patterns learned by the pre-trained Bi-GAT.
+
+**2. Uncertainty Estimate** $u_v \in \mathbb{R}^1$: Estimated via **Monte Carlo (MC) dropout**. We perform multiple forward passes with dropout enabled and compute the variance of node embedding norms:
+
 ```python
 # T forward passes with dropout enabled
-predictions = [bigat(x, edges) for _ in range(T)]
+predictions = [BiGAT(x, edges) for _ in range(T)]
 uncertainty = variance([‖z‖ for z in predictions])
 ```
 
-High uncertainty indicates nodes where Bi-GAT is unreliable, warranting LLM consultation.
+High uncertainty indicates nodes where the Bi-GAT is unreliable, warranting LLM consultation.
 
-## 4. Dataset
+**3. Estimated Homophily** $\hat{h}_v \in \mathbb{R}^1$: The soft local homophily score from the Homophily Estimator. Low homophily indicates heterophilous nodes where LLMs may excel.
 
-### 4.1 PHEME Dataset
+**4. Node Degree** $\deg(v) \in \mathbb{R}^1$: The number of connections in the propagation tree. Low-degree nodes have limited structural context for message passing.
 
-We evaluate on the PHEME dataset, specifically the Germanwings Crash event:
+**5. Original BERT Features** $\mathbf{x}_v \in \mathbb{R}^{768}$: The raw text embedding from BERT, providing semantic context for the router.
 
-| Statistic | Value |
-|-----------|-------|
-| Total threads | 469 |
-| Non-rumor threads | 231 |
-| Rumor threads | 238 |
+**Routing Feature Vector**:
 
-The Germanwings Crash dataset captures tweets surrounding the 2015 Germanwings Flight 9525 crash, including both accurate news coverage and misinformation.
+$$\mathbf{f}_v = [\mathbf{z}_G(v) \| u_v \| \hat{h}_v \| \deg(v) \| \mathbf{x}_v] \in \mathbb{R}^{256 + 1 + 1 + 1 + 768} = \mathbb{R}^{1027}$$
 
-### 4.2 Data Processing
+### 3.4.3 Step 2: The Node Router
 
-Each conversation thread is parsed into a rooted tree structure:
-- **Root node**: Source tweet (original claim)
-- **Child nodes**: Reply tweets
-- **Edges**: Parent-child relationships following the conversation structure
+The **Node Router** $\pi$ is a lightweight linear layer that maps routing features to a routing probability:
 
-The dataset is split:
-- **Training**: 70%
-- **Validation**: 15%
-- **Test**: 15%
+$$a_v = \pi(\mathbf{f}_v) = \sigma(\mathbf{w}^\top \mathbf{f}_v) \in [0, 1]$$
 
-Stratified sampling preserves class balance across splits.
+where $\sigma$ is the sigmoid function. A higher $a_v$ indicates that the node is more likely to benefit from LLM consultation.
 
-### 4.3 Feature Extraction
+**Top-K Selection Strategy**: Rather than applying a fixed threshold (which requires calibration), GLANCE uses a **top-K selection** strategy per mini-batch:
 
-**Text Features**: BERT (bert-base-uncased) produces 768-dimensional embeddings:
+$$R_g = \text{TopK}\left(\{a_v : v \in g\}, k\right)$$
+
+where $k$ is the routing budget (number of nodes routed per graph) and $R_g$ is the set of routed nodes in graph $g$.
+
+**Curriculum Routing (K-Decay)**: The routing budget follows an exponential decay schedule during training:
+
+$$k(\text{epoch}) = k_{end} + (k_{start} - k_{end}) \cdot \gamma^{\text{epoch} - 1}$$
+
+where:
+- $k_{start} = 12$: Initial budget (route most nodes for exploration)
+- $k_{end} = 3$: Final budget (route fewer nodes as model learns)
+- $\gamma = 0.5$: Decay rate
+
+This curriculum-style approach starts with aggressive routing (helping the router learn from diverse examples) and gradually reduces to selective routing (focusing on high-value cases).
+
+### 3.4.4 Step 3: Multi-Hop LLM Encoder
+
+For each routed node, the **LLM Encoder** generates contextual embeddings by processing the node's text in the context of its neighborhood. Unlike standard approaches that generate a single embedding, GLANCE produces **multi-hop embeddings** at three structural levels:
+
+**Level 0 (Ego)**: The node's own text only
 ```
-x_v = BERT_CLS(text_v) ∈ R^{768}
+Prompt_0(v): "Predict the node's category from the provided context.
+              Possible categories: [rumour, non-rumour].
+              EGO:
+              {text_v}
+              Category?"
 ```
 
-**Structural Features**:
-- Top-down edge index (parent → child)
-- Bottom-up edge index (child → parent)
-- Root node mask
-- Node degree
+**Level 1 (1-hop)**: The ego node plus its direct neighbors
+```
+Prompt_1(v): "Predict the node's category from the provided context.
+              Possible categories: [rumour, non-rumour].
+              EGO:
+              {text_v}
+              HOP1:
+              - {neighbor_1_text}
+              - {neighbor_2_text}
+              ...
+              Category?"
+```
 
-## 5. Experimental Setup
+**Level 2 (2-hop)**: The ego node plus 2-hop neighborhood
+```
+Prompt_2(v): "Predict the node's category from the provided context.
+              Possible categories: [rumour, non-rumour].
+              EGO:
+              {text_v}
+              HOP2:
+              - {2hop_neighbor_1_text}
+              - {2hop_neighbor_2_text}
+              ...
+              Category?"
+```
 
-### 5.1 Hyperparameters
+Each prompt is encoded using the LLM embedding API (text-embedding-3-large) to produce a 3072-dimensional embedding. The three level embeddings are concatenated:
 
-| Parameter | Value |
-|-----------|-------|
-| BERT model | bert-base-uncased |
-| BERT embedding dim | 768 |
-| Bi-GAT hidden dim | 128 |
-| Bi-GAT attention heads | 4 |
-| Bi-GAT dropout | 0.3 |
-| GNN embedding dim | 256 (2 × 128) |
-| Homophily hidden dim | 128 |
-| Router input dim | 1027 |
-| LLM embedding dim | 3072 |
-| Multi-hop LLM dim | 9216 (3 × 3072) |
-| Refiner hidden dim | 256 |
-| Batch size | 32 |
-| Learning rate | 5e-4 |
-| Weight decay | 1e-3 |
-| Gradient clip | 1.0 |
-| Phase 1 epochs | 150 |
-| Phase 2 epochs | 100 |
-| Phase 3 epochs | 150 |
-| Early stopping patience | 20 |
-| K budget start | 12 |
-| K budget end | 3 |
-| K decay rate | 0.5 |
-| LLM cost penalty (β) | 0.2 |
-| Entropy weight (λ_ent) | 0.01 |
-| MC dropout passes | 5 |
+$$\mathbf{z}_L(v) = [\mathbf{z}_{L,0}(v) \| \mathbf{z}_{L,1}(v) \| \mathbf{z}_{L,2}(v)] \in \mathbb{R}^{9216}$$
 
-### 5.2 Evaluation Metrics
+This multi-hop design aligns with the aggregation patterns in advanced GNNs and captures:
+- **Ego context**: The core semantic content
+- **1-hop context**: Direct engagement (replies, quotes)
+- **2-hop context**: Broader conversational threads
 
-- **Accuracy**: Overall correct classification rate
-- **Precision**: True positives / (True positives + False positives)
-- **Recall**: True positives / (True positives + False negatives)
-- **F1 Score**: Harmonic mean of precision and recall
-- **AUC-ROC**: Area under ROC curve
+**Neighborhood Sampling**: To manage computational cost and prompt length, we sample up to 5 neighbors per hop. This is particularly important for PHEME threads with many replies.
 
-### 5.3 Baselines for Comparison
+**Embedding Caching**: The LLM Encoder maintains a cache to avoid re-encoding identical prompts across training epochs, significantly reducing API calls.
 
-1. **Bi-GAT (Phase 1 only)**: Standalone bidirectional GAT without LLM augmentation
-2. **Bi-GAT + Homophily**: Bi-GAT with homophily estimation (no routing)
-3. **GLANCE + Bi-GAT (Full)**: Complete framework with adaptive LLM routing
+### 3.4.5 Step 4: Refiner MLP
 
-## 6. Expected Results and Analysis
+The **Refiner MLP** $C$ fuses Bi-GAT and LLM embeddings for routed nodes:
 
-### 6.1 Hypothesized Outcomes
+$$\hat{p}_{C,v} = \text{softmax}\left(C\left(\left[\mathbf{z}_G(v) \| \mathbf{z}_L(v)\right]\right)\right)$$
 
-Based on the GLANCE paper findings and Bi-GAT's proven effectiveness:
+Architecture:
+- Input: Concatenation of Bi-GAT (256-dim) and LLM (9216-dim) embeddings → 9472 dimensions
+- Layer 1: Linear(9472, 256) + ReLU + Dropout(0.3)
+- Layer 2: Linear(256, 128) + ReLU + Dropout(0.3)
+- Output: Linear(128, 2) → class logits
 
-1. **Bi-GAT Baseline**: Strong performance due to bidirectional attention capturing both causal and evidential patterns in propagation trees.
+### 3.4.6 Graph-Level Refined Prediction
 
-2. **GLANCE + Bi-GAT Improvement**: 
-   - Overall accuracy improvement of 1-3%
-   - Significant gains on heterophilous nodes (10-15% improvement)
-   - Reduced LLM usage through intelligent routing
+For graph-level classification:
+1. **Non-routed nodes**: Retain their Bi-GAT embeddings $\mathbf{z}_G(v)$
+2. **Routed nodes**: Replace embeddings with refined signal (softmax of refiner logits expanded to embedding space)
+3. **Graph embedding**: Mean pooling over all node embeddings
+4. **Classification**: Graph-level classifier produces final logits
 
-3. **Routing Behavior**:
-   - High-degree, high-homophily nodes: Routed less frequently (GNN handles well)
-   - Low-degree, low-homophily nodes: Routed more frequently (LLM provides context)
+The refined graph embedding is:
 
-### 6.2 Key Insights
+$$\mathbf{h}_g^{refined} = \frac{1}{|V_g|} \sum_{v \in V_g} \tilde{\mathbf{z}}_v$$
 
-1. **Complementary Strengths**: Bi-GAT excels at structural pattern recognition while LLMs provide semantic reasoning—GLANCE's routing mechanism intelligently combines both.
+where $\tilde{\mathbf{z}}_v = \mathbf{z}_G(v) + \text{Expand}(\text{softmax}(\text{Refiner}(\mathbf{z}_G(v), \mathbf{z}_L(v))))$ for routed nodes.
 
-2. **Cost Efficiency**: By routing only ~25% of nodes to the LLM, we achieve significant performance gains with manageable computational overhead.
+### 3.4.7 Training the Router: Advantage-Based Policy Gradient
 
-3. **Robustness**: The advantage-based training objective ensures the router learns from both successes and failures, continuously improving routing decisions.
+Since LLM calls are non-differentiable (discrete API calls), the router cannot be trained via standard backpropagation. We use a **policy gradient-inspired approach** that treats routing as a contextual bandit problem.
 
-## 7. Conclusion
+**Counterfactual Rewards**: For each routed node, we compare the loss when using the LLM vs. relying solely on Bi-GAT:
 
-This methodology presents GLANCE + Bi-GAT, a framework that synergistically combines:
+For a routed node $v$:
+$$\ell_{GNN}^{(v)} = -\sum_{k=1}^{C} \mathbb{1}[y_v = k] \log p_{GNN,k}^{(v)}$$
+$$\ell_{LLM}^{(v)} = -\sum_{k=1}^{C} \mathbb{1}[y_v = k] \log p_{C,k}^{(v)}$$
 
-1. **Bi-GAT's bidirectional attention** for capturing causal and evidential patterns in rumor propagation trees
+The **advantage** of routing is:
+$$r_v = \ell_{GNN}^{(v)} - \ell_{LLM}^{(v)} - \beta$$
 
-2. **GLANCE's adaptive routing** for intelligently selecting nodes where the LLM can provide complementary context
+where $\beta = 0.2$ is an LLM cost penalty that discourages unnecessary LLM calls.
 
-3. **Multi-hop LLM embeddings** that capture neighborhood context at multiple structural levels
+For non-routed nodes:
+$$r_v = -\ell_{GNN}^{(v)}$$
 
-The three-phase training pipeline—Bi-GAT pre-training, homophily estimation, and GLANCE router training—enables efficient learning while maintaining interpretability. By selectively invoking the LLM only where needed, GLANCE + Bi-GAT achieves robust rumor detection performance while remaining computationally tractable.
+**Interpretation**:
+- Positive $r_v$: LLM reduced prediction loss enough to offset its cost → good routing decision
+- Negative $r_v$: LLM hurt performance or wasn't used when it could have helped → poor routing decision
 
-### Future Work
+**Router Loss**: The router is optimized to maximize expected advantage:
 
-- Extending to additional PHEME events (Charlie Hebdo, Ferguson, Ottawa, Sydney Siege)
-- Experimenting with different LLM embedding models
-- Exploring alternative routing strategies (e.g., reinforcement learning)
-- Applying the framework to other rumor detection datasets (Weibo, FakeNewsNet)
+$$\mathcal{L}_{router} = -\mathbb{E}[r_v \cdot \log \pi(\mathbf{f}_v)] + \lambda_{ent} \cdot H[\pi]$$
 
-## References
+where:
+- $\log \pi(\mathbf{f}_v) = \log a_v$ for routed nodes (encourage high probability)
+- $\log (1 - \pi(\mathbf{f}_v)) = \log(1 - a_v)$ for non-routed nodes (discourage unnecessary routing)
+- $H[\pi] = -(a_v \log a_v + (1 - a_v) \log(1 - a_v))$ is the entropy bonus with weight $\lambda_{ent} = 0.01$
 
-1. Loveland, D., Yang, Y.-A., & Koutra, D. (2025). *GLANCE: Learning When to Leverage LLMs for Node-Aware GNN-LLM Fusion*. arXiv:2510.10849.
+**Combined Loss**: The final training objective combines prediction loss and routing loss:
 
-2. Tao, J., Wang, C., & Jiang, B. (2026). *LLM-Enhanced Rumor Detection via Virtual Node Induced Edge Prediction*. arXiv:2602.13279.
+$$\mathcal{L}_{total} = \mathcal{L}_{pred} + \lambda_{router} \cdot \mathcal{L}_{router}$$
 
-3. Veličković, P., et al. (2018). *Graph Attention Networks*. ICLR.
+where $\mathcal{L}_{pred} = -\sum_{g \in \mathcal{B}} [y_g \log(\hat{y}_g^{refined}) + (1 - y_g) \log(1 - \hat{y}_g^{refined})]$.
 
-4. Bian, T., et al. (2020). *Rumor Detection on Social Media with Bi-Directional Graph Convolutional Networks*. AAAI.
+### 3.4.8 Training Procedure
 
-5. Ma, J., Gao, W., & Wong, K.-F. (2016). *Detecting Rumors from Microblogs with Recurrent Neural Networks*. IJCAI.
+Phase 3 training proceeds as follows:
+
+1. **Freeze Bi-GAT and Homophily Estimator**: These components are pre-trained and not updated during GLANCE training.
+
+2. **Initialize LLM Encoder**: The LLM encoder is a frozen API interface (no training, just inference).
+
+3. **Train Router and Refiner**: Only the router $\pi$ and refiner MLP $C$ are trained, along with the graph-level classifier heads.
+
+4. **Forward Pass**:
+   - Generate Bi-GAT embeddings (frozen, no gradients)
+   - Compute routing features and scores
+   - Select top-K nodes per graph
+   - Query LLM for routed nodes (frozen)
+   - Compute refined embeddings via refiner
+   - Aggregate to graph level and classify
+
+5. **Backward Pass**:
+   - Compute prediction loss on refined graph predictions
+   - Compute counterfactual rewards and router loss
+   - Update router and refiner parameters only
+
+## 3.5 Data Processing Pipeline
+
+### 3.5.1 Text Feature Extraction
+
+Each tweet is encoded using **BERT (bert-base-uncased)** to produce a 768-dimensional text embedding:
+
+$$\mathbf{x}_v = \text{BERT}_{CLS}(t_v) \in \mathbb{R}^{768}$$
+
+The [CLS] token representation captures the overall semantic meaning of the tweet and serves as the node feature for all subsequent processing.
+
+### 3.5.2 Graph Construction
+
+Each PHEME thread is parsed into a rooted tree structure:
+
+- **Root node**: The source tweet (original claim)
+- **Child nodes**: All reply tweets in the thread
+- **Top-down edges**: Parent → Child (direction of information propagation)
+- **Bottom-up edges**: Child → Parent (reverse direction)
+- **Root mask**: Boolean vector marking the source node
+
+### 3.5.3 Dataset Split
+
+The PHEME Germanwings Crash dataset is split with stratification:
+- **Training**: 70% of threads
+- **Validation**: 15% of threads
+- **Testing**: 15% of threads
+
+Stratified sampling ensures consistent class ratios across splits.
+
+## 3.6 Implementation Details
+
+### 3.6.1 Hyperparameters
+
+| Component | Parameter | Value |
+|-----------|-----------|-------|
+| **BERT Encoder** | Model | bert-base-uncased |
+| | Embedding dimension | 768 |
+| | Max sequence length | 128 |
+| **Bi-GAT** | Hidden dimension | 128 |
+| | Attention heads | 4 |
+| | Dropout | 0.3 |
+| | Number of layers | 2 |
+| | GNN embedding dim | 256 (2 × 128) |
+| **Homophily Estimator** | Hidden dimension | 128 |
+| | Output classes | 2 |
+| | Dropout | 0.3 |
+| **Router** | Input dimension | 1027 |
+| | Output | sigmoid probability |
+| | Initial K budget | 12 |
+| | Final K budget | 3 |
+| | K decay rate | 0.5 |
+| **LLM Encoder** | Model | text-embedding-3-large |
+| | Embedding dimension | 3072 |
+| | Multi-hop dim | 9216 (3 × 3072) |
+| | Batch size | 64 |
+| | Neighbor sample size | 5 |
+| **Refiner MLP** | Input dimension | 9472 (256 + 9216) |
+| | Hidden dimensions | 256 → 128 |
+| | Output | 2 (logits) |
+| **Training** | Batch size | 32 |
+| | Learning rate | 5 × 10⁻⁴ |
+| | Weight decay | 10⁻³ |
+| | Gradient clip | 1.0 |
+| | Phase 1 epochs | 150 |
+| | Phase 2 epochs | 100 |
+| | Phase 3 epochs | 150 |
+| | Early stopping patience | 20 |
+| | LLM cost penalty (β) | 0.2 |
+| | Entropy weight (λ_ent) | 0.01 |
+| | Router loss weight (λ_router) | 1.0 |
+| | MC dropout passes | 5 |
+
+### 3.6.2 Computational Considerations
+
+- **Bi-GAT and Homophily Estimator** are trained on GPU with efficient message passing via PyTorch Geometric
+- **LLM Encoder** uses API calls to a remote embedding service; responses are cached to minimize redundant requests
+- **Router training** maintains a balance between exploration (high K) and exploitation (low K) through curriculum scheduling
